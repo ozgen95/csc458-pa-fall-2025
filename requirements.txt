@@ -1,0 +1,2 @@
+# Install ltprotocol from GitHub
+ltprotocol @ git+https://github.com/davidlin2k/ltprotocol.git@master#egg=ltprotocol

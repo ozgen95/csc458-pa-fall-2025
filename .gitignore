@@ -1,0 +1,16 @@
+__pycache__
+
+# Dependency files
+*.d
+.*.d
+
+# Object files
+*.o
+
+# Executables
+sr
+
+# Other common build artifacts
+*.a
+*.so
+*.dylib
