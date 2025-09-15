@@ -360,6 +360,8 @@ class Lab1Tester:
         if not self.sr_present():
             return
         reactor.run()
+        # Clean up SR process when reactor stops
+        self.cleanup_sr()
 
     def set_active_test(self, T):
         self.active_test = T
@@ -385,21 +387,34 @@ class Lab1Tester:
     def sr_crashed(self):
         """Returns true if the process has terminated."""
         ret = self.sr.poll() is not None
-        # print "ret => ", ret
+        if ret:
+            # Process has terminated, ensure proper cleanup
+            self.cleanup_sr()
         return ret
 
     def restart_sr(self):
         self.server.signal_test = defer.Deferred()  # blah
         self.err("Restarting SR")
-        try:
-            self.sr.terminate()
-            self.sr.kill()
-        except:
-            # probably already dead
-            pass
-        subprocess.Popen("killall -9 sr >/dev/null 2>&1", shell=True).wait()
+        self.cleanup_sr()
         self.start_sr()
         return self.server.signal_test
+
+    def cleanup_sr(self):
+        """Clean up SR process and any hanging instances"""
+        if hasattr(self, 'sr') and self.sr:
+            try:
+                self.sr.terminate()
+                self.sr.kill()
+            except Exception as e:
+                pass
+        
+        # Also kill any other hanging sr processes
+        try:
+            subprocess.Popen("killall -9 sr >/dev/null 2>&1", shell=True).wait()
+            subprocess.Popen("killall -9 sr_solution >/dev/null 2>&1", shell=True).wait()
+            subprocess.Popen("killall -9 sr_solution_arm >/dev/null 2>&1", shell=True).wait()
+        except Exception:
+            pass
 
     def receive_dummy(self, intfname, packet):
         self.warn("dummy receive")
@@ -451,6 +466,7 @@ class Lab1Tester:
             yield defer.waitForDeferred(wfd)
 
         # Done!
+        self.cleanup_sr()
         reactor.stop()
 
     def summary(self):
