@@ -32,7 +32,9 @@ void sr_init(struct sr_instance *sr) {
 
   pthread_create(&thread, &(sr->attr), sr_arpcache_timeout, sr);
 
-  /* Add initialization code here! */
+  /* Add initialization code here! */ 
+  
+
 
 } /* -- sr_init -- */
 
