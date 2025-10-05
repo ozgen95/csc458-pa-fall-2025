@@ -65,4 +65,56 @@ void sr_handlepacket(struct sr_instance *sr, uint8_t *packet /* lent */,
 
   /* fill in code here */
 
+  struct sr_if *iface = sr_get_interface(sr, interface);
+  if (!iface) return; // if packet came to the wrong interface ignore  
+
+  if (len < sizeof(sr_ethernet_hdr_t)) return; // if length of the packet is less than ethernet header size it's not a valid ethernet frame so discard
+  
+  sr_ethernet_hdr_t *eth = (sr_ethernet_hdr_t *)packet; 
+
+  uint16_t ethtype = ntohs(eth->ether_type); 
+
+  // handle arp
+  if(ethtype = ethertype_arp_t){
+    if (len < sizeof(sr_arp_hdr_t) + sizeof(sr_ethernet_hdr_t)) return; 
+
+    sr_arp_hdr_t * arp = (sr_arp_hdr_t *)(packet + sizeof(sr_ethernet_hdr_t));
+    
+    if (ntohs(arp->ar_op) == arp_op_request) { // handle arp request 
+      // check interfaces of the router and see if any of them matches 
+      handle_arp_request(sr, eth, arp, interface);
+    }
+    else if (ntohs(arp->ar_op) == arp_op_reply) { // handle arp reply  
+
+    }
+    else {
+      fprintf("Invalid arp operation code"); 
+      return; 
+    } 
+      
+  }
+  // handle ip 
+  else if (ethtype = ethertype_ip){
+    if (len < sizeof(sr_ip_hdr_t) + sizeof(sr_ethernet_hdr_t)) return;
+  }
+
+
+
 } /* end sr_ForwardPacket */
+
+// handle arp request 
+
+void handle_arp_request(struct sr_instance *sr, sr_ethernet_hdr_t *eth, sr_arp_hdr_t *arp, char *interface_name) {
+  // check if arp request's ip matches any of the interfaces of the router
+  struct sr_if * owner; 
+  for (struct sr_if * iface = sr->if_list; iface != NULL; iface = iface->next){
+    if (iface->ip == arp->ar_tip){
+      owner = iface;
+      break; 
+    }
+  }
+  if (!owner) fprintf("No matching router has no interface matching arp request's IP"); 
+
+
+}
+
