@@ -74,15 +74,15 @@ void sr_handlepacket(struct sr_instance *sr, uint8_t *packet /* lent */,
 
   uint16_t ethtype = ntohs(eth->ether_type); 
 
-  // handle arp
-  if(ethtype = ethertype_arp_t){
+  // handle arp 
+  if(ethtype == ethertype_arp){
     if (len < sizeof(sr_arp_hdr_t) + sizeof(sr_ethernet_hdr_t)) return; 
 
     sr_arp_hdr_t * arp = (sr_arp_hdr_t *)(packet + sizeof(sr_ethernet_hdr_t));
     
-    if (ntohs(arp->ar_op) == arp_op_request) { // handle arp request 
+    if (ntohs(arp->ar_op) == arp_op_request) { // if arp request 
       // check interfaces of the router and see if any of them matches 
-      handle_arp_request(sr, eth, arp, interface);
+      handle_arp_request(sr, eth, arp, interface); // handle arp request 
     }
     else if (ntohs(arp->ar_op) == arp_op_reply) { // handle arp reply  
 
@@ -113,7 +113,39 @@ void handle_arp_request(struct sr_instance *sr, sr_ethernet_hdr_t *eth, sr_arp_h
       break; 
     }
   }
-  if (!owner) fprintf("No matching router has no interface matching arp request's IP"); 
+
+  if (!owner) { 
+    fprintf("Router has no interface matching arp request's IP");
+    return;
+  } 
+  // we found a matching interface 
+  int reply_len = sizeof(sr_ethernet_hdr_t) + sizeof(sr_arp_hdr_t);
+  uint8_t *buf = (uint8_t *)malloc(reply_len);
+  if (!buf) return;
+  sr_ethernet_hdr_t *n_eth = (sr_ethernet_hdr_t *)buf; // create new eth hdr
+  sr_arp_hdr_t * n_arp = (sr_arp_hdr_t *)(buf + sizeof(sr_ethernet_hdr_t)); // create new arp hdr
+
+  // in the new ethernet packet, sender is the owner of the interface that received the request
+  // destination is the host who requested the arp
+  memcpy(n_eth->ether_shost, owner->addr, ETHER_ADDR_LEN);
+  memcpy(n_eth->ether_dhost, eth->ether_shost, ETHER_ADDR_LEN);
+  
+  n_eth->ether_type = htons(ethertype_arp);
+
+  // Set new arp for the reply
+  n_arp->ar_hrd = htons(arp_hrd_ethernet);  /* format of hardware address   */
+  n_arp->ar_pro = htons(ethertype_ip); /* format of protocol address   */
+  n_arp->ar_hln = ETHER_ADDR_LEN; /* length of hardware address   */
+  n_arp->ar_pln = 4; /* length of protocol address   */
+  n_arp->ar_op  = htons(arp_op_reply); /* ARP reply opcode */
+
+  memcpy(n_arp->ar_sha, owner->addr, ETHER_ADDR_LEN); //owner's hardware address is set as the sender 
+  n_arp->ar_sip = owner->ip;                 
+  memcpy(n_arp->ar_tha, arp->ar_sha, ETHER_ADDR_LEN); // target hardware adress is the sender's hardware address 
+  n_arp->ar_tip = arp->ar_sip; // target ip is set as the sender's ip
+
+  sr_send_packet(sr, buf, reply_len, interface_name);
+  free(buf);
 
 
 }
