@@ -85,20 +85,30 @@ void sr_handlepacket(struct sr_instance *sr, uint8_t *packet /* lent */,
       handle_arp_request(sr, eth, arp, interface); // handle arp request 
     }
     else if (ntohs(arp->ar_op) == arp_op_reply) { // handle arp reply  
-
+      struct sr_arpreq * arpreq = sr_arpcache_insert(&sr->cache, arp->ar_sha, arp->ar_sip);
+      if (arpreq != NULL) {
+        struct sr_packet *pkt = arpreq->packets;
+        while (pkt) {
+          sr_ethernet_hdr_t *feth = (sr_ethernet_hdr_t *)pkt->buf;
+          struct sr_if *out_if = sr_get_interface(sr, pkt->iface);
+          if (out_if) {
+            memcpy(feth->ether_dhost, arp->ar_sha, ETHER_ADDR_LEN);
+            memcpy(feth->ether_shost, out_if->addr, ETHER_ADDR_LEN);
+            sr_send_packet(sr, pkt->buf, pkt->len, out_if->name);
+          }
+          pkt = pkt->next;
+        }
+        sr_arpreq_destroy(&sr->cache, req);
+      }
+      return;
     }
-    else {
-      fprintf("Invalid arp operation code"); 
-      return; 
-    } 
-      
+
   }
+      
   // handle ip 
   else if (ethtype = ethertype_ip){
     if (len < sizeof(sr_ip_hdr_t) + sizeof(sr_ethernet_hdr_t)) return;
   }
-
-
 
 } /* end sr_ForwardPacket */
 
