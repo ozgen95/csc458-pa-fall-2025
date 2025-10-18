@@ -14,107 +14,94 @@
 #include "sr_router.h"
 #include "sr_utils.h"
 
-/* =========================  ARP SWEEP (per spec)  ========================= */
-
-void build_and_send_arp_request(struct sr_instance *sr,
+void send_arp_req(struct sr_instance *sr,
                                        struct sr_if *out_if,
-                                       uint32_t target_ip_nbo) {
-  if (!out_if) return;
+                                       uint32_t target_ip) {
 
   unsigned len = sizeof(sr_ethernet_hdr_t) + sizeof(sr_arp_hdr_t);
   uint8_t *buf = (uint8_t *)malloc(len);
   if (!buf) return;
 
   sr_ethernet_hdr_t *eth = (sr_ethernet_hdr_t *)buf;
-  sr_arp_hdr_t *arp     = (sr_arp_hdr_t *)(buf + sizeof(sr_ethernet_hdr_t));
+  sr_arp_hdr_t *arp = (sr_arp_hdr_t *)(buf + sizeof(sr_ethernet_hdr_t));
 
-  /* Ethernet: broadcast */
-  memset(eth->ether_dhost, 0xff, ETHER_ADDR_LEN);
+  /* Ethernet*/
   memcpy(eth->ether_shost, out_if->addr, ETHER_ADDR_LEN);
+  memset(eth->ether_dhost, 0xff, ETHER_ADDR_LEN); /* broadcast */
+
   eth->ether_type = htons(ethertype_arp);
 
-  /* ARP request */
+  /* ARP */
   arp->ar_hrd = htons(arp_hrd_ethernet);
   arp->ar_pro = htons(ethertype_ip);
-  arp->ar_hln = ETHER_ADDR_LEN;
+  arp->ar_op = htons(arp_op_request);
   arp->ar_pln = 4;
-  arp->ar_op  = htons(arp_op_request);
+  arp->ar_hln = ETHER_ADDR_LEN;
+
   memcpy(arp->ar_sha, out_if->addr, ETHER_ADDR_LEN);
-  arp->ar_sip = out_if->ip;        /* network order */
+  arp->ar_sip = out_if->ip;       
   memset(arp->ar_tha, 0x00, ETHER_ADDR_LEN);
-  arp->ar_tip = target_ip_nbo;     /* network order */
+  arp->ar_tip = target_ip;    
 
   sr_send_packet(sr, buf, len, out_if->name);
   free(buf);
 }
 
-/* Build + send ICMP Type 3 Code 1 (Host Unreachable) replying to one waiting pkt */
-void send_icmp_host_unreach_for_pkt(struct sr_instance *sr,
-                                           const struct sr_packet *waiting_pkt) {
-  if (!waiting_pkt || !waiting_pkt->buf) return;
-  const uint8_t *rx = waiting_pkt->buf;
-  unsigned rxlen = waiting_pkt->len;
+/* Send icmp host unreachable for packet */
+void send_icmp_host_unreachable(struct sr_instance *sr,
+                                           const struct sr_packet *packet) {
+  if (!packet || !packet->buf) return;
+  const uint8_t *frame = packet->buf;
+  unsigned len = packet->len;
+  if (len < sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t)) return;
 
-  if (rxlen < sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t)) return;
+  const sr_ip_hdr_t *n_ip = (const sr_ip_hdr_t *)(frame + sizeof(sr_ethernet_hdr_t));
+  uint32_t dst_ip = n_ip->ip_src;  
+  struct sr_if *out_if = sr_get_interface(sr, packet->iface);
 
-  const sr_ip_hdr_t *rx_ip =
-      (const sr_ip_hdr_t *)(rx + sizeof(sr_ethernet_hdr_t));
-  uint32_t dst_ip = rx_ip->ip_src;  /* send error back to original source */
+  if (!out_if) out_if = sr->if_list; 
 
-  /* Pick an egress interface. Per spec we can reply from the interface we tried to use. */
-  struct sr_if *out_if = sr_get_interface(sr, waiting_pkt->iface);
-  if (!out_if) out_if = sr->if_list; /* fallback */
-
-  /* Compose Ethernet + IP + ICMP T3(3,1) with 28B offending bytes */
   unsigned icmp_len = sizeof(sr_icmp_t3_hdr_t);
-  unsigned ip_len   = sizeof(sr_ip_hdr_t) + icmp_len;
-  unsigned total    = sizeof(sr_ethernet_hdr_t) + ip_len;
+  unsigned ip_len = sizeof(sr_ip_hdr_t) + icmp_len;
+  unsigned total = sizeof(sr_ethernet_hdr_t) + ip_len;
 
   uint8_t *buf = (uint8_t *)malloc(total);
   if (!buf) return;
 
-  sr_ethernet_hdr_t *eth = (sr_ethernet_hdr_t *)buf;
-  sr_ip_hdr_t       *ip  = (sr_ip_hdr_t *)(buf + sizeof(sr_ethernet_hdr_t));
-  sr_icmp_t3_hdr_t  *icmp= (sr_icmp_t3_hdr_t *)((uint8_t *)ip + sizeof(sr_ip_hdr_t));
+  sr_ethernet_hdr_t * eth = (sr_ethernet_hdr_t *)buf;
+  sr_ip_hdr_t * ip = (sr_ip_hdr_t *)(buf + sizeof(sr_ethernet_hdr_t));
+  sr_icmp_t3_hdr_t * icmp = (sr_icmp_t3_hdr_t *)((uint8_t *)ip + sizeof(sr_ip_hdr_t));
 
-  /* Fill L2 source now; L2 dest after ARP lookup below */
   memcpy(eth->ether_shost, out_if->addr, ETHER_ADDR_LEN);
   eth->ether_type = htons(ethertype_ip);
 
-  /* IPv4 header */
-  ip->ip_v   = 4;
-  ip->ip_hl  = 5;
+  /* IP */
+  ip->ip_hl = 5;
+  ip->ip_v = 4;
   ip->ip_tos = 0;
   ip->ip_len = htons(ip_len);
-  ip->ip_id  = 0;
-  ip->ip_off = 0;
   ip->ip_ttl = 64;
-  ip->ip_p   = ip_protocol_icmp;
+  ip->ip_id = 0;
+  ip->ip_off = 0;
+  ip->ip_p = ip_protocol_icmp;
   ip->ip_src = out_if->ip;
-  ip->ip_dst = dst_ip;   /* back to original sender */
+  ip->ip_dst = dst_ip;   /* send back to sender */
   ip->ip_sum = 0;
-
-  /* ICMP Type 3 Code 1 with 28 bytes of offending header+8 */
+  
   memset(icmp, 0, sizeof(*icmp));
   icmp->icmp_type = 3;
   icmp->icmp_code = 1;
   unsigned copy_bytes = sizeof(sr_ip_hdr_t) + 8;
-  if (rxlen < sizeof(sr_ethernet_hdr_t) + copy_bytes)
-    copy_bytes = rxlen - sizeof(sr_ethernet_hdr_t);
+  if (len < sizeof(sr_ethernet_hdr_t) + copy_bytes)
+    copy_bytes = len - sizeof(sr_ethernet_hdr_t);
   if (copy_bytes > ICMP_DATA_SIZE)
     copy_bytes = ICMP_DATA_SIZE;
-  memcpy(icmp->data, rx + sizeof(sr_ethernet_hdr_t), copy_bytes);
+  memcpy(icmp->data, frame + sizeof(sr_ethernet_hdr_t), copy_bytes);
 
-  /* Checksums */
-  ip->ip_sum    = cksum(ip, sizeof(sr_ip_hdr_t));
-  icmp->icmp_sum= cksum(icmp, sizeof(sr_icmp_t3_hdr_t));
+  ip->ip_sum = cksum(ip, sizeof(sr_ip_hdr_t));
+  icmp->icmp_sum = cksum(icmp, sizeof(sr_icmp_t3_hdr_t));
 
-  /* Get next-hop IP for this reply: if the out_if has a gateway route, use it
-     but since we’re replying to a host on the same path we attempted earlier,
-     we can ARP for dst_ip directly (simple and spec-compliant). */
   uint32_t next_hop_ip = dst_ip;
-
-  /* ARP for L2 dest (reply path) */
   struct sr_arpentry *entry = sr_arpcache_lookup(&sr->cache, next_hop_ip);
   if (entry) {
     memcpy(eth->ether_dhost, entry->mac, ETHER_ADDR_LEN);
@@ -122,9 +109,8 @@ void send_icmp_host_unreach_for_pkt(struct sr_instance *sr,
     free(entry);
     free(buf);
   } else {
-    /* Queue this ICMP for ARP resolution to the original source */
     sr_arpcache_queuereq(&sr->cache, next_hop_ip, buf, total, out_if->name);
-    free(buf); /* queuereq copies */
+    free(buf); 
   }
 }
 
@@ -133,24 +119,25 @@ void handle_arpreq(struct sr_instance *sr, struct sr_arpreq *req) {
 
   if (difftime(now, req->sent) > 1.0) {
     if (req->times_sent >= 5) {
-      /* Send ICMP host unreachable to source addr of ALL pkts waiting on this req */
-      struct sr_packet *p;
-      for (p = req->packets; p; p = p->next) {
-        send_icmp_host_unreach_for_pkt(sr, p);
+      /* send ICMP host unreachable, it has been a while */
+      struct sr_packet *packet;
+      for (packet = req->packets; packet; packet = packet->next) {
+        send_icmp_host_unreachable(sr, packet);
       }
-      /* Destroy request (also frees its packet list) */
+      /* destroy arp req */
       sr_arpreq_destroy(&sr->cache, req);
     } else {
-      /* Send ARP request out the interface we intended for these packets */
+      /* send arp req */
       struct sr_if *out_if = NULL;
       if (req->packets && req->packets->iface) {
         out_if = sr_get_interface(sr, req->packets->iface);
       }
-      if (!out_if) out_if = sr->if_list;  /* safe fallback */
-
-      build_and_send_arp_request(sr, out_if, req->ip);
-      req->sent = now;
+      if (!out_if){
+        out_if = sr->if_list; 
+      }
+      send_arp_req(sr, out_if, req->ip);
       req->times_sent++;
+      req->sent = now;
     }
   }
 }
@@ -163,7 +150,6 @@ void handle_arpreq(struct sr_instance *sr, struct sr_arpreq *req) {
 void sr_arpcache_sweepreqs(struct sr_instance *sr) {
   struct sr_arpreq *req = sr->cache.requests;
   while (req) {
-    /* Save next BEFORE handling (it may destroy the current request) */
     struct sr_arpreq *next = req->next;
     handle_arpreq(sr, req);
     req = next;
