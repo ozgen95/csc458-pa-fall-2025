@@ -313,66 +313,74 @@ void sr_handlepacket(struct sr_instance *sr, uint8_t *packet /* lent */,
     ip->ip_sum = 0;
     uint16_t result = cksum(ip, iphdr_len);
     if (old_sum != result) return; 
+    
+    
     if (pkt_is_for_us(sr, ip->ip_dst)) {
-      
+      /* check if we have received an icmp message*/
       if (ip->ip_p == ip_protocol_icmp) {
-      /* ICMP echo request → echo reply */
+
         if (len >= sizeof(sr_ethernet_hdr_t) + iphdr_len + sizeof(sr_icmp_hdr_t)) {
+
           sr_icmp_hdr_t *icmp = (sr_icmp_hdr_t*)((uint8_t*)ip + iphdr_len);
-          if (icmp->icmp_type == 8 && icmp->icmp_code == 0) {
-            send_icmp_echo_reply(sr, packet, len, interface); /* ICMP echo reply */
+          
+          /* check if we have received an echo request (ping) */
+          if (icmp->icmp_code == 0 && icmp->icmp_type == 8) {
+            send_icmp_echo_reply(sr, packet, len, interface); 
             return;
           }
         }
-      /* Otherwise ignore other ICMP-to-router */
+      /* we don't care about other types of ICMPs lol*/
       return;
     } else {
-      /* TCP/UDP to router → Port Unreachable (3,3) for traceroute */
-      send_icmp_t3(sr, packet, len, 3, 3, interface);                  /* ICMP port unreachable */    
+      /* we received a protocol other than icmp we don't care about them so send ICMP port unreachable */
+      send_icmp_t3(sr, packet, len, 3, 3, interface);
       return;
     }
   }
 
-  /* Forwarding path */
+  /* Packet is not for us, need to forward */
   if (ip->ip_ttl <= 1) {
-    send_icmp_t3(sr, packet, len, 11, 0, interface);                   /* Time Exceeded */           
+    /* Packet has been around for too long, send time exceeded icmp */
+    send_icmp_t3(sr, packet, len, 11, 0, interface);
     return;
   }
 
-  /* Decrement TTL, recompute checksum */
+  /* Decrease TTL, recompute cksum */
   ip->ip_ttl -= 1;
   ip->ip_sum = 0;
-  ip->ip_sum = cksum(ip, iphdr_len);                                   /* spec: TTL−− + recompute */  
+  ip->ip_sum = cksum(ip, iphdr_len);
 
-  /* Longest Prefix Match */
+  /* Longest prefix match with router's interfaces' IPs */
   const struct sr_rt *rt = lpm_lookup(sr, ip->ip_dst);
   if (!rt) {
-    send_icmp_t3(sr, packet, len, 3, 0, interface);                    /* Dest net unreachable */   
+    /* No match was found send icmp destination net unreachable */
+    send_icmp_t3(sr, packet, len, 3, 0, interface);
     return;
   }
 
   /* Next-hop IP is gateway if set, else final dst */
-  uint32_t next_hop_ip = (rt->gw.s_addr != 0) ? rt->gw.s_addr : ip->ip_dst;
-  struct sr_if *out_if = sr_get_interface(sr, rt->interface);
-  if (!out_if) return;
+  if (rt->gw.s_addr != 0) {
+    uint32_t next_hop_ip = rt->gw.s_addr;
+  } else {
+    uint32_t next_hop_ip = ip->ip_dst;
+  }
 
-  /* ARP cache lookup */
+  struct sr_if *out_if = sr_get_interface(sr, rt->interface);
+
+  /* Check if there's an entry containing the MAC adress of the next_hop_ip in the cache */
   struct sr_arpentry *entry = sr_arpcache_lookup(&sr->cache, next_hop_ip);
   if (entry) {
-    /* Rewrite Ethernet L2 and send */
-    memcpy(eth->ether_shost, out_if->addr, ETHER_ADDR_LEN);
     memcpy(eth->ether_dhost, entry->mac, ETHER_ADDR_LEN);
+    memcpy(eth->ether_shost, out_if->addr, ETHER_ADDR_LEN);
     sr_send_packet(sr, packet, len, out_if->name);
     free(entry);
     return;
   } else {
-    /* Queue and (sweep thread will) ARP for next_hop_ip */
     struct sr_arpreq* req = sr_arpcache_queuereq(&sr->cache, next_hop_ip, packet, len, out_if->name);
+    /* broadcast arp req */
     handle_arpreq(sr, req);
-    /* Optionally: trigger immediate ARP here if req->times_sent==0; otherwise rely on sweep */
     return;
-  }
-  
+    }
   }
 
 
