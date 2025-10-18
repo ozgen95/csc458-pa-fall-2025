@@ -299,7 +299,7 @@ void sr_handlepacket(struct sr_instance *sr, uint8_t *packet /* lent */,
       
   /* ethernet packet of type ip has arrived to the router*/
   else if (ethtype == ethertype_ip){
-    printf("ip\n");
+    
     if (len < sizeof(sr_ip_hdr_t) + sizeof(sr_ethernet_hdr_t)) return; 
     sr_ip_hdr_t * ip = (sr_ip_hdr_t *)(packet + sizeof(sr_ethernet_hdr_t));
 
@@ -314,7 +314,7 @@ void sr_handlepacket(struct sr_instance *sr, uint8_t *packet /* lent */,
     uint16_t result = cksum(ip, iphdr_len);
     if (old_sum != result) return; 
     if (pkt_is_for_us(sr, ip->ip_dst)) {
-      printf("pkt for us \n");
+      
       if (ip->ip_p == ip_protocol_icmp) {
       /* ICMP echo request → echo reply */
         if (len >= sizeof(sr_ethernet_hdr_t) + iphdr_len + sizeof(sr_icmp_hdr_t)) {
@@ -364,12 +364,11 @@ void sr_handlepacket(struct sr_instance *sr, uint8_t *packet /* lent */,
     memcpy(eth->ether_dhost, entry->mac, ETHER_ADDR_LEN);
     sr_send_packet(sr, packet, len, out_if->name);
     free(entry);
-    printf("if entry\n");
     return;
   } else {
     /* Queue and (sweep thread will) ARP for next_hop_ip */
-    sr_arpcache_queuereq(&sr->cache, next_hop_ip, packet, len, out_if->name);
-    printf("else entry\n");
+    struct sr_arpreq* req = sr_arpcache_queuereq(&sr->cache, next_hop_ip, packet, len, out_if->name);
+    handle_arpreq(sr, req);
     /* Optionally: trigger immediate ARP here if req->times_sent==0; otherwise rely on sweep */
     return;
   }

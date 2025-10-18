@@ -12,10 +12,11 @@
 #include "sr_if.h"
 #include "sr_protocol.h"
 #include "sr_router.h"
+#include "sr_utils.h"
 
 /* =========================  ARP SWEEP (per spec)  ========================= */
 
-static void build_and_send_arp_request(struct sr_instance *sr,
+void build_and_send_arp_request(struct sr_instance *sr,
                                        struct sr_if *out_if,
                                        uint32_t target_ip_nbo) {
   if (!out_if) return;
@@ -48,7 +49,7 @@ static void build_and_send_arp_request(struct sr_instance *sr,
 }
 
 /* Build + send ICMP Type 3 Code 1 (Host Unreachable) replying to one waiting pkt */
-static void send_icmp_host_unreach_for_pkt(struct sr_instance *sr,
+void send_icmp_host_unreach_for_pkt(struct sr_instance *sr,
                                            const struct sr_packet *waiting_pkt) {
   if (!waiting_pkt || !waiting_pkt->buf) return;
   const uint8_t *rx = waiting_pkt->buf;
@@ -127,14 +128,14 @@ static void send_icmp_host_unreach_for_pkt(struct sr_instance *sr,
   }
 }
 
-/* =============== handle_arpreq(req) per header pseudocode =============== */
-static void handle_arpreq(struct sr_instance *sr, struct sr_arpreq *req) {
+void handle_arpreq(struct sr_instance *sr, struct sr_arpreq *req) {
   time_t now = time(NULL);
 
   if (difftime(now, req->sent) > 1.0) {
     if (req->times_sent >= 5) {
       /* Send ICMP host unreachable to source addr of ALL pkts waiting on this req */
-      for (struct sr_packet *p = req->packets; p; p = p->next) {
+      struct sr_packet *p;
+      for (p = req->packets; p; p = p->next) {
         send_icmp_host_unreach_for_pkt(sr, p);
       }
       /* Destroy request (also frees its packet list) */
