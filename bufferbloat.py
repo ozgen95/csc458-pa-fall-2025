@@ -23,6 +23,7 @@ import termcolor as T
 import sys
 import os
 import math
+import statistics
 
 # TODO: Don't just read the TODO sections in this code.  Remember that
 # one of the goals of this assignment is for you to learn how to use
@@ -81,7 +82,11 @@ class BBTopo(Topo):
         # interface names will change from s0-eth1 to newname-eth1.
         switch = self.addSwitch("s0")
 
-        # TODO: Add links with appropriate characteristics
+        # adding link between host 1 and the switch, assuming args.delay is the propagation delay is the delay between two nodes and not the RTT delay. 
+        self.addLink(hosts[0], switch, bw=args.bw_host, delay=f"{args.delay}ms")
+
+        # adding link between the switch and host 2 with the queue size specified and bottleneck bw 
+        self.addLink(switch, hosts[1], bw=args.bw_net, delay=f"{args.delay}ms", max_queue_size=args.maxq)
 
 
 # Simple wrappers around monitoring utilities.  You are welcome to
@@ -133,6 +138,12 @@ def start_iperf(net: Mininet) -> None:
     server = h2.popen("iperf -s -w 16m")
     # TODO: Start the iperf client on h1.  Ensure that you create a
     # long lived TCP flow. You may need to redirect iperf's stdout to avoid blocking.
+    h1 = net.get("h1")
+    print("Starting iperf client...")
+    # h1 connects to h2 using its IP and we hold the connection till the end of the experiment 
+    h1.popen(f"echo '' > {os.path.join(args.dir, 'iperf.txt')}", shell=True)
+    h1.popen(f"iperf -c {h2.IP()} -t {args.time} -w 16m > {os.path.join(args.dir, 'iperf.txt')}", shell=True)
+
 
 
 def start_webserver(net: Mininet) -> List[subprocess.Popen]:
@@ -157,6 +168,10 @@ def start_ping(net: Mininet) -> None:
     h1 = net.get("h1")
     h1.popen(f"echo '' > {os.path.join(args.dir, 'ping.txt')}", shell=True)
 
+    h2 = net.get("h2")
+    # Start the ping train
+    h1.popen(f"ping -i 0.1 {h2.IP()} > {os.path.join(args.dir, 'ping.txt')} &", shell=True)
+
 
 def cleanup_processes() -> None:
     """Ensure all spawned processes are terminated."""
@@ -165,6 +180,17 @@ def cleanup_processes() -> None:
         "pgrep -f webserver.py | xargs kill -9 2>/dev/null || true", shell=True
     )
     subprocess.run("pgrep -f iperf | xargs kill -9 2>/dev/null || true", shell=True)
+
+# Download the index.html webpage for a single time from h1 to h2 
+
+def fetch(net: Mininet): 
+    h2 = net.get("h2")
+    h1 = net.get("h1")
+    h1_ip = h1.IP()
+    # might require h1's IP rather than what we have now 10.0.0.1 hardcoded probably h1's address
+    res = h2.cmd(f"curl -o /dev/null -s -w %{{time_total}} http://{h1_ip}/http/index.html")
+       
+    return float(res)  
 
 
 def bufferbloat() -> None:
@@ -195,12 +221,12 @@ def bufferbloat() -> None:
     # Depending on the order you add links to your network, this
     # number may be 1 or 2.  Ensure you use the correct number.
     #
-    # qmon = start_qmon(iface='s0-eth2',
-    #                  outfile='%s/q.txt' % (args.dir))
-    qmon = None
+    qmon = start_qmon(iface='s0-eth2',
+                     outfile='%s/q.txt' % (args.dir))
+    # qmon = None
 
     # TODO: Start iperf, webservers, etc.
-    # start_iperf(net)
+    start_iperf(net)
 
     # Hint: The command below invokes a CLI which you can use to
     # debug.  It allows you to run arbitrary commands inside your
@@ -215,19 +241,35 @@ def bufferbloat() -> None:
     # spawned on host h1 (not from google!)
     # Hint: have a separate function to do this and you may find the
     # loop below useful.
+    webserver = start_webserver(net)
+
+    fetch_times = []
     start_time = time()
     while True:
         # do the measurement (say) 3 times.
-        sleep(1)
+        # sleep(1)
         now = time()
         delta = now - start_time
         if delta > args.time:
             break
         print("%.1fs left..." % (args.time - delta))
 
+        for _ in range(3):
+            res = fetch(net)
+            fetch_times.append(res)
+
+        sleep(5)
+
+
     # TODO: compute average (and standard deviation) of the fetch
     # times.  You don't need to plot them.  Just note it in your
     # README and explain.
+
+    avg = statistics.mean(fetch_times)
+    stdev = statistics.stdev(fetch_times)
+
+    print(f"average fetch time {avg}")
+    print(f"stdev {stdev}")
 
     stop_tcpprobe()
     if qmon is not None:
