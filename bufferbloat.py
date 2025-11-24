@@ -257,9 +257,7 @@ def bufferbloat() -> None:
         for _ in range(3):
             res = fetch(net)
             fetch_times.append(res)
-
-        sleep(5)
-
+            sleep(5/3) # so that we have more uniform fetches rather than burst of fetches every 5 seconds
 
     # TODO: compute average (and standard deviation) of the fetch
     # times.  You don't need to plot them.  Just note it in your
